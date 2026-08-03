@@ -2,11 +2,13 @@
 
 Personal speech-to-text app built on LiveKit rooms + a Python STT agent, with a FastAPI backend and Next.js frontend.
 
+Live demo: https://speech-to-text-misd6d2pm-adityavardhan2623-1393s-projects.vercel.app/
+
 ## Architecture
 
 1. Frontend calls FastAPI to create a session and mint a LiveKit token.
 2. Frontend connects directly to LiveKit Cloud over WebRTC and publishes mic audio.
-3. A Python STT agent joins the same room, runs Deepgram STT, publishes live captions on the `transcription` text stream, and POSTs final segments to FastAPI.
+3. A Python STT agent joins the same room, runs Groq STT, publishes live captions on the `transcription` text stream, and POSTs final segments to FastAPI.
 4. FastAPI persists final transcript segments in Neon PostgreSQL.
 
 ```
@@ -14,6 +16,9 @@ Next.js (Vercel) ──HTTP──► FastAPI ──► Neon Postgres
       │                           │
       └──── WebRTC / text streams ┴──── LiveKit Cloud ◄── STT Agent
 ```
+
+Locally, the FastAPI backend and the STT agent run as two separate processes
+for easier development.
 
 ## Prerequisites
 
@@ -25,16 +30,17 @@ Create accounts and generate these values manually:
 | `LIVEKIT_URL` | [LiveKit Cloud](https://cloud.livekit.io) → Project Settings |
 | `LIVEKIT_API_KEY` | LiveKit Cloud → Settings → Keys |
 | `LIVEKIT_API_SECRET` | LiveKit Cloud → Settings → Keys |
-| `DEEPGRAM_API_KEY` | [Deepgram Console](https://console.deepgram.com) → API Keys |
+| `GROQ_API_KEY` | [Groq](https://www.groq.com/) → API Keys |
 
 Also install:
 
 - Python 3.12+
 - Node.js 20+
-- [Fly CLI](https://fly.io/docs/hands-on/install-flyctl/)
-- [LiveKit CLI](https://docs.livekit.io/home/cli/cli-setup/) (`brew install livekit-cli`)
+- [LiveKit CLI](https://docs.livekit.io/home/cli/cli-setup/) (`brew install livekit-cli`) — optional, useful for `lk agent logs` style debugging against LiveKit Cloud
 
 ## Local development
+
+Locally, backend and agent run as two separate processes (simpler to debug than the combined production container).
 
 ### 1. Database (Neon)
 
@@ -94,8 +100,7 @@ cd agent
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env.local
-# edit .env.local
+cp .env.example .env
 ```
 
 Set:
@@ -104,7 +109,7 @@ Set:
 LIVEKIT_URL=wss://your-project.livekit.cloud
 LIVEKIT_API_KEY=...
 LIVEKIT_API_SECRET=...
-DEEPGRAM_API_KEY=...
+GROQ_API_KEY=...
 BACKEND_URL=http://localhost:8080
 ```
 
@@ -138,67 +143,6 @@ npm run dev
 
 Open http://localhost:3000, click **Start new session**, allow mic access, and speak.
 
-## Deploy
-
-### Fly.io (backend)
-
-```bash
-cd backend
-fly launch --no-deploy
-fly secrets set \
-  DATABASE_URL='postgresql+asyncpg://...' \
-  LIVEKIT_URL='wss://your-project.livekit.cloud' \
-  LIVEKIT_API_KEY='...' \
-  LIVEKIT_API_SECRET='...' \
-  CORS_ORIGINS='https://your-app.vercel.app' \
-  LIVEKIT_AGENT_NAME='stt-agent'
-fly deploy
-```
-
-Note your Fly app URL, e.g. `https://speech-to-text-api.fly.dev`.
-
-### LiveKit Cloud (agent)
-
-```bash
-cd agent
-lk cloud auth
-lk agent create
-```
-
-`lk agent create` registers the agent and writes `livekit.toml`. Then set secrets for the deployed worker:
-
-```bash
-lk agent update-secrets --secrets \
-  LIVEKIT_URL=wss://your-project.livekit.cloud,\
-  LIVEKIT_API_KEY=...,\
-  LIVEKIT_API_SECRET=...,\
-  DEEPGRAM_API_KEY=...,\
-  BACKEND_URL=https://speech-to-text-api.fly.dev
-```
-
-Deploy:
-
-```bash
-lk agent deploy
-```
-
-Verify in the LiveKit Cloud dashboard that the agent name is `stt-agent` (must match `LIVEKIT_AGENT_NAME` in the backend).
-
-### Vercel (frontend)
-
-```bash
-cd frontend
-vercel
-```
-
-Set environment variable in the Vercel project:
-
-```env
-NEXT_PUBLIC_BACKEND_URL=https://speech-to-text-api.fly.dev
-```
-
-Then update backend `CORS_ORIGINS` on Fly to include your Vercel URL if it changed.
-
 ## API summary
 
 | Method | Path | Purpose |
@@ -215,14 +159,21 @@ Then update backend `CORS_ORIGINS` on Fly to include your Vercel URL if it chang
 
 ## STT provider
 
-Default: **Deepgram Nova-3** via `livekit-plugins-deepgram`.
+Default: **Groq whisper-large-v3-turbo** via `livekit-plugins-groq`. Fully
+API-based — no model weights are downloaded or run locally, which keeps the
+agent process lightweight enough to share a container with the backend on a
+memory-limited free tier.
 
-Alternatives supported by LiveKit Agents include AssemblyAI and local Silero. Deepgram is the best default here because of low latency, good free-tier credits, and first-class LiveKit plugin support.
+Alternatives supported by LiveKit Agents include Deepgram, AssemblyAI, and
+local Silero. Groq is the default here because it matches the agent's
+current configuration and uses the same LiveKit Groq plugin for STT.
 
 ## Project layout
 
 ```text
 speech-to-text/
+├── Dockerfile   Combined backend + agent image (Render deploy)
+├── start.sh     Entrypoint: runs agent in background, uvicorn in foreground
 ├── backend/     FastAPI + SQLAlchemy + Alembic
 ├── agent/       livekit-agents STT worker
 ├── frontend/    Next.js + LiveKit React components
@@ -231,7 +182,28 @@ speech-to-text/
 
 ## Troubleshooting
 
-- **No captions**: confirm the agent is running (`lk agent logs`) and that `LIVEKIT_AGENT_NAME` matches `stt-agent`.
-- **No saved history**: only final STT segments are persisted; interim captions are live-only.
-- **CORS errors**: add your exact frontend origin to backend `CORS_ORIGINS`.
-- **DB connection errors**: ensure Neon URL uses the `postgresql+asyncpg://` driver prefix.
+- **No captions**: confirm the agent process is running (check Render logs
+  for the `livekit.agents` worker registering — you should see something
+  like `"worker is below capacity, marking as available"`) and that
+  `LIVEKIT_AGENT_NAME` matches `stt-agent` on both backend and agent.
+- **No saved history**: only final STT segments are persisted; interim
+  captions are live-only.
+- **404 on `//sessions` (double slash) in Render logs**: `NEXT_PUBLIC_BACKEND_URL`
+  on Vercel has a trailing slash. Set it without one
+  (`https://your-backend.onrender.com`, not `.../`), then trigger a fresh
+  Vercel deploy — env var edits alone don't apply to an already-built
+  deployment. The `request()` helper in `frontend/lib/api.ts` also strips any
+  trailing slash defensively, so this shouldn't recur even if the env var is
+  set with one.
+- **`OPTIONS` preflight returns 400 / CORS errors**: `CORS_ORIGINS` on Render
+  doesn't exactly match the frontend's real origin. Copy the *exact* Vercel
+  URL (scheme + host, no trailing slash, no path) into `CORS_ORIGINS`, save,
+  and confirm Render actually redeployed with the new value — like Vercel,
+  Render env var changes require a redeploy to take effect.
+- **Instance killed / "Ran out of memory (used over 512MB)"**: see the
+  memory note under [Render deploy](#render-backend--agent-combined-service)
+  above. Rule out local model loading first; if none is present, the overhead
+  is likely just two Python processes in one small container.
+- **DB connection errors**: ensure the Neon URL uses the
+  `postgresql+asyncpg://` driver prefix, and that `sslmode=require` in the
+  raw Neon string becomes `ssl=require` in the SQLAlchemy async DSN.
