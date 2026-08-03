@@ -5,4 +5,4 @@ set -e
 python agent/agent.py start &
 
 # Start FastAPI in the foreground (keeps container alive)
-uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}
+uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8080}
