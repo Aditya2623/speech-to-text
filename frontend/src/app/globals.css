@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #0b1020;
+  --foreground: #e8edf7;
+  --panel: #121933;
+  --accent: #5b8cff;
+  --muted: #8b95ad;
+}
+
+body {
+  color: var(--foreground);
+  background: radial-gradient(circle at top, #172042 0%, var(--background) 55%);
+  min-height: 100vh;
+}
+
+a {
+  color: var(--accent);
+}

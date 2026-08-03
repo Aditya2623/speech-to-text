@@ -1,0 +1,9 @@
+# Generated/updated by `lk agent create` and `lk agent deploy`.
+# Replace subdomain with your LiveKit Cloud project subdomain.
+
+[project]
+  subdomain = "your-subdomain"
+
+[agent]
+  id = ""
+  name = "stt-agent"
