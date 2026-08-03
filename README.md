@@ -4,6 +4,8 @@ Personal speech-to-text app built on LiveKit rooms + a Python STT agent, with a 
 
 Live demo: https://speech-to-text-misd6d2pm-adityavardhan2623-1393s-projects.vercel.app/
 
+> **Known issue:** The backend and STT agent run combined in a single container on Render's free tier (512MB RAM) to stay within a no-cost deployment. Under load, this can occasionally exceed the memory limit and cause the instance to restart ("Ran out of memory (used over 512MB)"). If the live demo seems unresponsive, it may be mid-restart — retrying after ~30–60 seconds usually resolves it. See [Troubleshooting](#troubleshooting) for details and possible fixes.
+
 ## Architecture
 
 1. Frontend calls FastAPI to create a session and mint a LiveKit token.
@@ -195,11 +197,6 @@ speech-to-text/
   deployment. The `request()` helper in `frontend/lib/api.ts` also strips any
   trailing slash defensively, so this shouldn't recur even if the env var is
   set with one.
-- **`OPTIONS` preflight returns 400 / CORS errors**: `CORS_ORIGINS` on Render
-  doesn't exactly match the frontend's real origin. Copy the *exact* Vercel
-  URL (scheme + host, no trailing slash, no path) into `CORS_ORIGINS`, save,
-  and confirm Render actually redeployed with the new value — like Vercel,
-  Render env var changes require a redeploy to take effect.
 - **Instance killed / "Ran out of memory (used over 512MB)"**: see the
   memory note under [Render deploy](#render-backend--agent-combined-service)
   above. Rule out local model loading first; if none is present, the overhead
